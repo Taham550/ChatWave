@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatWave</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Socket.IO CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Custom scrollbar for message area */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1e293b; /* bg-slate-800 */
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #475569; /* bg-slate-600 */
+            border-radius: 4px;
+        }
+
+        /* Message fade-in animation */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans h-screen flex items-center justify-center p-4">
+
+    <!-- Main Container -->
+    <div class="h-full w-full max-w-4xl flex flex-col sm:flex-row bg-slate-800 rounded-lg shadow-2xl overflow-hidden">
+
+        <!-- Login/Room Selection Screen -->
+        <div id="login-screen" class="flex flex-col items-center justify-center p-8 w-full sm:w-2/5 md:w-1/3 bg-slate-900 text-center">
+            <i class="fa-solid fa-comments text-6xl text-sky-400 mb-4"></i>
+            <h1 class="text-3xl font-bold text-sky-400 mb-6">ChatWave</h1>
+            <form id="join-form" class="space-y-4 w-full">
+                <div>
+                    <label for="username" class="sr-only">Username</label>
+                    <input type="text" id="username" name="username" placeholder="Enter your username" class="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-full text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all duration-300" required>
+                </div>
+                <div>
+                    <label for="room-name" class="sr-only">Room Name</label>
+                    <input type="text" id="room-name" name="room-name" placeholder="Room Name (e.g., 'general')" class="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-full text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all duration-300">
+                </div>
+                <button type="submit" class="w-full py-3 px-4 bg-sky-500 hover:bg-sky-600 rounded-full font-semibold text-white shadow-lg transition-all duration-300 transform hover:scale-105">
+                    Join Chat
+                </button>
+            </form>
+        </div>
+        
+        <!-- Chat Screen -->
+        <div id="chat-screen" class="hidden flex-1 flex flex-col">
+            
+            <!-- Chat Header -->
+            <div class="bg-slate-700 p-4 flex items-center justify-between shadow-md">
+                <div class="flex items-center">
+                    <div class="relative flex h-3 w-3 mr-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold text-sky-300" id="current-room-name">General</h2>
+                        <p class="text-sm text-slate-400"><span id="user-count">1</span> user(s) online</p>
+                    </div>
+                </div>
+                <button id="leave-button" class="text-slate-400 hover:text-red-400 transition-colors duration-200">
+                    <i class="fa-solid fa-door-open text-xl"></i>
+                </button>
+            </div>
+
+            <!-- Message Area -->
+            <div id="messages" class="flex-1 p-4 overflow-y-auto custom-scrollbar space-y-4">
+                <!-- Messages will be injected here by JavaScript -->
+            </div>
+
+            <!-- Typing Indicator -->
+            <div id="typing-indicator" class="p-2 text-sm text-slate-400 hidden">
+                <i class="fa-solid fa-ellipsis-h animate-pulse mr-2"></i>
+                <span id="typing-user"></span> is typing...
+            </div>
+
+            <!-- Message Input Area -->
+            <div class="bg-slate-700 p-4">
+                <form id="message-form" class="flex items-center space-x-2">
+                    <input type="text" id="message-input" autocomplete="off" placeholder="Type a message..." class="flex-1 px-4 py-3 bg-slate-800 border border-slate-600 rounded-full text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all duration-300">
+                    <button type="submit" id="send-button" class="bg-sky-500 hover:bg-sky-600 text-white rounded-full p-3 transition-all duration-300 transform hover:scale-110 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const loginScreen = document.getElementById('login-screen');
+        const chatScreen = document.getElementById('chat-screen');
+        const joinForm = document.getElementById('join-form');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const messagesContainer = document.getElementById('messages');
+        const currentRoomName = document.getElementById('current-room-name');
+        const userCount = document.getElementById('user-count');
+        const typingIndicator = document.getElementById('typing-indicator');
+        const typingUser = document.getElementById('typing-user');
+        const sendButton = document.getElementById('send-button');
+        const leaveButton = document.getElementById('leave-button');
+
+        let username = '';
+        let room = '';
+        let isTyping = false;
+        let typingTimeout = null;
+
+        // Utility function to scroll to the bottom of the chat
+        const scrollToBottom = () => {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        };
+
+        // Utility function to display messages
+        const addMessage = (data) => {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', 'p-3', 'rounded-xl', 'relative', 'max-w-xs', 'sm:max-w-sm', 'md:max-w-md', 'break-words');
+            
+            const messageTime = new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            if (data.username === username) {
+                messageElement.classList.add('bg-sky-600', 'text-white', 'self-end', 'ml-auto', 'rounded-br-none', 'shadow-md');
+                messageElement.innerHTML = `
+                    <p class="font-bold">You</p>
+                    <p>${data.message}</p>
+                    <span class="absolute bottom-1 right-2 text-xs text-white opacity-70">${messageTime}</span>
+                `;
+            } else {
+                messageElement.classList.add('bg-slate-700', 'text-slate-100', 'mr-auto', 'rounded-bl-none', 'shadow-md');
+                messageElement.innerHTML = `
+                    <p class="font-bold text-sky-300">${data.username}</p>
+                    <p>${data.message}</p>
+                    <span class="absolute bottom-1 right-2 text-xs text-slate-400 opacity-70">${messageTime}</span>
+                `;
+            }
+            messagesContainer.appendChild(messageElement);
+            scrollToBottom();
+        };
+
+        // Event handler for joining the chat
+        joinForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            username = document.getElementById('username').value.trim();
+            room = (document.getElementById('room-name').value || 'general').trim().toLowerCase();
+
+            if (username) {
+                socket.emit('join_chat', { username: username, room: room });
+                loginScreen.classList.add('hidden');
+                chatScreen.classList.remove('hidden');
+                messagesContainer.innerHTML = '';
+                messageInput.focus();
+            }
+        });
+
+        // Event handler for sending messages
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (message) {
+                socket.emit('send_message', { message: message });
+                messageInput.value = '';
+                // Reset typing state and disable send button after sending
+                isTyping = false;
+                socket.emit('typing', { is_typing: false });
+                clearTimeout(typingTimeout);
+                sendButton.disabled = true;
+                sendButton.classList.add('opacity-50');
+            }
+        });
+
+        // Event handler for leaving the chat
+        leaveButton.addEventListener('click', () => {
+            socket.disconnect();
+            window.location.reload(); // Simple reload to get back to login screen
+        });
+
+        // Typing indicator logic
+        messageInput.addEventListener('input', () => {
+            // Enable/disable send button based on input
+            if (messageInput.value.trim().length > 0) {
+                sendButton.disabled = false;
+                sendButton.classList.remove('opacity-50');
+            } else {
+                sendButton.disabled = true;
+                sendButton.classList.add('opacity-50');
+            }
+
+            // Emit typing event
+            if (!isTyping) {
+                isTyping = true;
+                socket.emit('typing', { is_typing: true });
+            }
+            
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                isTyping = false;
+                socket.emit('typing', { is_typing: false });
+            }, 2000); // Shorter timeout for better responsiveness
+        });
+
+        // Socket.IO event listeners
+        socket.on('joined_room', (data) => {
+            currentRoomName.textContent = data.room.charAt(0).toUpperCase() + data.room.slice(1);
+            userCount.textContent = data.users.length;
+            data.messages.forEach(addMessage);
+            const welcomeMessage = document.createElement('div');
+            welcomeMessage.classList.add('text-center', 'text-sm', 'text-slate-500', 'italic', 'my-2');
+            welcomeMessage.textContent = `You have joined the ${data.room} chat room.`;
+            messagesContainer.appendChild(welcomeMessage);
+            scrollToBottom();
+        });
+
+        socket.on('new_message', (data) => {
+            addMessage(data);
+        });
+
+        socket.on('user_joined', (data) => {
+            const systemMessage = document.createElement('div');
+            systemMessage.classList.add('text-center', 'text-sm', 'text-slate-500', 'italic', 'my-2');
+            systemMessage.textContent = `${data.username} has joined the chat.`;
+            messagesContainer.appendChild(systemMessage);
+            userCount.textContent = data.users_count;
+            scrollToBottom();
+        });
+
+        socket.on('user_left', (data) => {
+            const systemMessage = document.createElement('div');
+            systemMessage.classList.add('text-center', 'text-sm', 'text-slate-500', 'italic', 'my-2');
+            systemMessage.textContent = `${data.username} has left the chat.`;
+            messagesContainer.appendChild(systemMessage);
+            userCount.textContent = data.users_count;
+            scrollToBottom();
+        });
+
+        socket.on('user_typing', (data) => {
+            typingUser.textContent = data.username;
+            if (data.is_typing) {
+                typingIndicator.classList.remove('hidden');
+            } else {
+                typingIndicator.classList.add('hidden');
+            }
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error("Connection error:", err);
+            // Instead of alert, use a custom message box or toast notification for a better UX
+            // For simplicity in this example, we'll log to console.
+            console.log('Failed to connect to the server. Please try again.');
+        });
+    </script>
+</body>
+</html>
